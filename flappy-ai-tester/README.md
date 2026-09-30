@@ -104,6 +104,30 @@ Opzioni utili di `play.py`: `--headed` mostra il browser, `--video DIR` registra
 sessione, `--realtime` gioca il clone in tempo reale, `--max-score N` interrompe una
 partita a N tubi (default 200, così un agente perfetto non gioca per sempre).
 
+## Addestramento del DQN: note per la tesi
+
+- **Reward shaping.** Con la sola ricompensa del gioco (+0.1 per passo, +1 per tubo,
+  −1 alla morte), dopo 100.000 passi l'agente aveva imparato solo a sopravvivere
+  fino al primo tubo (punteggio medio circa 0). Con un bonus denso per
+  l'allineamento al centro del varco (`--shaping 0.1`, usato solo in addestramento
+  e mai in valutazione) supera i tubi già dopo circa 80.000 passi.
+- **Instabilità.** Il DQN mostra *catastrophic forgetting*: la media mobile arriva a
+  circa 33 a 250k passi, crolla a circa 5 a 300k e poi risale. Per questo
+  `train.py` salva un checkpoint ogni 50.000 passi e il modello si **sceglie
+  valutandolo su partite nuove** (seed diversi dal training), non prendendo
+  l'ultimo.
+- Il modello fornito, `models/dqn_flappy.zip`, è il checkpoint da 200.000 passi
+  (circa 40 minuti su 4 core, 4 browser in parallelo).
+
+Valutazione dei checkpoint (10 partite, seed 77, tetto 200 tubi):
+
+| checkpoint | media | mediana | minimo |
+|---|---|---|---|
+| 200k | **200** | 200 | 200 |
+| 250k | 7.9 | 2.5 | 0 |
+| 350k | **200** | 200 | 200 |
+| 400k | 76.6 | 47 | 0 |
+
 ## Sul sito reale (flappybird.io)
 
 L'ambiente di sviluppo non raggiunge flappybird.io, quindi il profilo
