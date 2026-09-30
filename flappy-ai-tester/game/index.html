@@ -210,7 +210,8 @@
 
   // solo per validazione della percezione, mai usato dagli agenti
   window.__harness = Object.assign(window.__harness || {}, {
-    state: () => ({ mode: state.mode, score: state.score, birdY: state.birdY,
+    state: () => ({ mode: state.mode, score: state.score, birdY: state.birdY, birdV: state.birdV,
+                    pipes: state.pipes.map(p => ({ x: p.x, top: p.top, bottom: p.bottom })),
                     deathCause: state.deathCause }),
   });
 })();
