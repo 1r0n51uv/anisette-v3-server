@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flappy Clone</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #222; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="game" width="288" height="512"></canvas>
+<script>
+/*
+ * Clone HTML5 di Flappy Bird usato come ambiente di test controllato.
+ *
+ * Parametri URL:
+ *   ?seed=N       seme del generatore pseudo-casuale (tubi riproducibili)
+ *   ?lockstep=1   il gioco non avanza da solo: avanza solo con window.__harness.advance(n).
+ *                 Serve per addestrare l'agente più velocemente del tempo reale
+ *                 e in modo deterministico. L'input resta quello reale (tastiera/mouse).
+ *
+ * L'agente NON legge lo stato del gioco: percepisce solo i pixel del canvas.
+ * window.__harness.state() esiste solo per validare la percezione (ground truth).
+ */
+(() => {
+  const params = new URLSearchParams(location.search);
+  const LOCKSTEP = params.get("lockstep") === "1";
+  let seed = Number(params.get("seed") || Date.now()) >>> 0;
+
+  function rand() { // mulberry32
+    seed = (seed + 0x6D2B79F5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+
+  const GROUND_Y = 400;
+  const GRAVITY = 0.25;
+  const FLAP_V = -4.6;
+  const MAX_FALL = 8;
+  const SPEED = 2;
+  const PIPE_W = 52;
+  const GAP = 110;
+  const PIPE_EVERY = 90;          // frame tra un tubo e il successivo
+  const BIRD_X = 60, BIRD_W = 34, BIRD_H = 24;
+  const RESTART_COOLDOWN = 30;    // frame dopo il game over prima di accettare input
+
+  let state, flapQueued = false;
+
+  function reset() {
+    state = {
+      mode: "ready",   // ready | playing | dead
+      birdY: 230, birdV: 0, t: 0, pipes: [], score: 0,
+      groundOffset: 0, deadFrames: 0, deathCause: null,
+    };
+  }
+
+  function spawnPipe() {
+    const gapCenter = 110 + rand() * (GROUND_Y - 220);
+    state.pipes.push({ x: W, top: gapCenter - GAP / 2, bottom: gapCenter + GAP / 2, scored: false });
+  }
+
+  function input() { flapQueued = true; }
+
+  function update() {
+    const s = state;
+    const flap = flapQueued;
+    flapQueued = false;
+
+    if (s.mode === "ready") {
+      s.groundOffset = (s.groundOffset + SPEED) % 24;
+      s.birdY = 230 + Math.sin(s.t / 8) * 4;
+      s.t++;
+      if (flap) { s.mode = "playing"; s.birdV = FLAP_V; s.t = 0; }
+      return;
+    }
+
+    if (s.mode === "dead") {
+      // l'uccello cade fino a terra, lo scenario è fermo
+      if (s.birdY + BIRD_H / 2 < GROUND_Y) {
+        s.birdV = Math.min(s.birdV + GRAVITY, MAX_FALL);
+        s.birdY = Math.min(s.birdY + s.birdV, GROUND_Y - BIRD_H / 2);
+      }
+      s.deadFrames++;
+      if (flap && s.deadFrames > RESTART_COOLDOWN) reset();
+      return;
+    }
+
+    // playing
+    if (flap) s.birdV = FLAP_V;
+    s.birdV = Math.min(s.birdV + GRAVITY, MAX_FALL);
+    s.birdY += s.birdV;
+    s.groundOffset = (s.groundOffset + SPEED) % 24;
+
+    if (s.t % PIPE_EVERY === 0) spawnPipe();
+    s.t++;
+    for (const p of s.pipes) {
+      p.x -= SPEED;
+      if (!p.scored && p.x + PIPE_W < BIRD_X - BIRD_W / 2) { p.scored = true; s.score++; }
+    }
+    s.pipes = s.pipes.filter(p => p.x + PIPE_W > -10);
+
+    // collisioni (hitbox leggermente ridotta come nell'originale)
+    const bx0 = BIRD_X - BIRD_W / 2 + 3, bx1 = BIRD_X + BIRD_W / 2 - 3;
+    const by0 = s.birdY - BIRD_H / 2 + 3, by1 = s.birdY + BIRD_H / 2 - 3;
+    if (by1 >= GROUND_Y) { die("ground"); s.birdY = GROUND_Y - BIRD_H / 2; return; }
+    if (by0 <= 0) { die("ceiling"); return; }
+    for (const p of s.pipes) {
+      if (bx1 > p.x && bx0 < p.x + PIPE_W) {
+        if (by0 < p.top) { die("pipe_top"); return; }
+        if (by1 > p.bottom) { die("pipe_bottom"); return; }
+      }
+    }
+  }
+
+  function die(cause) { state.mode = "dead"; state.deathCause = cause; state.birdV = 0; }
+
+  // ---------- rendering ----------
+  function drawPipe(p) {
+    const rim = 26;
+    ctx.fillStyle = "#73BF2E";
+    ctx.fillRect(p.x, 0, PIPE_W, p.top);
+    ctx.fillRect(p.x, p.bottom, PIPE_W, GROUND_Y - p.bottom);
+    ctx.fillRect(p.x - 3, p.top - rim, PIPE_W + 6, rim);
+    ctx.fillRect(p.x - 3, p.bottom, PIPE_W + 6, rim);
+    ctx.strokeStyle = "#558022"; ctx.lineWidth = 2;
+    ctx.strokeRect(p.x, -2, PIPE_W, p.top + 2);
+    ctx.strokeRect(p.x, p.bottom, PIPE_W, GROUND_Y - p.bottom);
+    ctx.strokeRect(p.x - 3, p.top - rim, PIPE_W + 6, rim);
+    ctx.strokeRect(p.x - 3, p.bottom, PIPE_W + 6, rim);
+  }
+
+  function drawBird() {
+    const s = state;
+    const angle = Math.max(-0.5, Math.min(1.2, s.birdV / 8));
+    ctx.save();
+    ctx.translate(BIRD_X, s.birdY);
+    ctx.rotate(s.mode === "ready" ? 0 : angle);
+    ctx.fillStyle = "#F8D820";
+    ctx.beginPath(); ctx.ellipse(0, 0, BIRD_W / 2, BIRD_H / 2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#FFFFFF";
+    ctx.beginPath(); ctx.arc(7, -5, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(8, -6, 2, 3);
+    ctx.fillStyle = "#F87820";
+    ctx.fillRect(10, 1, 9, 5);
+    ctx.restore();
+  }
+
+  function drawText(text, y, size) {
+    ctx.font = `bold ${size}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.lineWidth = 4; ctx.strokeStyle = "#000";
+    ctx.strokeText(text, W / 2, y);
+    ctx.fillStyle = "#FFF";
+    ctx.fillText(text, W / 2, y);
+  }
+
+  function render() {
+    const s = state;
+    ctx.fillStyle = "#4EC0CA";
+    ctx.fillRect(0, 0, W, H);
+    for (const p of s.pipes) drawPipe(p);
+    // terreno con strisce che scorrono (si fermano al game over)
+    ctx.fillStyle = "#DED895";
+    ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+    ctx.fillStyle = "#D2AA4F";
+    ctx.fillRect(0, GROUND_Y, W, 4);
+    ctx.fillStyle = "#9CE659";
+    for (let x = -s.groundOffset; x < W; x += 24) ctx.fillRect(x, GROUND_Y + 4, 12, 10);
+    drawBird();
+    if (s.mode === "ready") drawText("Premi SPAZIO", 150, 24);
+    else drawText(String(s.score), 60, 36);
+    if (s.mode === "dead") drawText("GAME OVER", 180, 32);
+  }
+
+  // ---------- input ----------
+  window.addEventListener("keydown", e => { if (e.code === "Space" || e.code === "ArrowUp") { e.preventDefault(); input(); } });
+  canvas.addEventListener("mousedown", input);
+  canvas.addEventListener("touchstart", e => { e.preventDefault(); input(); });
+
+  // ---------- loop ----------
+  reset();
+  render();
+
+  if (LOCKSTEP) {
+    window.__harness = {
+      advance(n = 1) { for (let i = 0; i < n; i++) update(); render(); },
+    };
+  } else {
+    const STEP = 1000 / 60;
+    let last = performance.now(), acc = 0;
+    function frame(now) {
+      acc += Math.min(now - last, 250);
+      last = now;
+      while (acc >= STEP) { update(); acc -= STEP; }
+      render();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // solo per validazione della percezione, mai usato dagli agenti
+  window.__harness = Object.assign(window.__harness || {}, {
+    state: () => ({ mode: state.mode, score: state.score, birdY: state.birdY,
+                    deathCause: state.deathCause }),
+  });
+})();
+</script>
+</body>
+</html>
