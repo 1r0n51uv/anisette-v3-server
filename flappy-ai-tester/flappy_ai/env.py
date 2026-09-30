@@ -9,6 +9,10 @@ Osservazione (6 valori normalizzati, tutti ricavati dai pixel):
     5  centro del varco successivo, relativo       (gap2_center - y) / H
 Azioni: 0 = non fare nulla, 1 = sbattere le ali.
 Ricompensa: +0.1 per passo in vita, +1 per tubo superato, -1 alla morte.
+Con ``shaping > 0`` (solo in addestramento) si aggiunge un bonus denso, fino a
+``shaping`` per passo, quando l'uccello è allineato al centro del varco: senza,
+la ricompensa per tubo è troppo rara e il DQN impara solo a sopravvivere fino
+al primo tubo.
 """
 from __future__ import annotations
 
@@ -38,12 +42,14 @@ class FlappyEnv(gym.Env):
 
     def __init__(self, url: str, profile: VisionProfile, lockstep: bool = False,
                  frame_skip: int = 2, headless: bool = True, max_score: int | None = None,
-                 static_frames_for_death: int = 2, record_video_dir: str | None = None):
+                 static_frames_for_death: int = 2, record_video_dir: str | None = None,
+                 shaping: float = 0.0):
         super().__init__()
         self.profile = profile
         self.frame_skip = frame_skip
         self.max_score = max_score
         self.static_needed = static_frames_for_death
+        self.shaping = shaping
         self.browser = GameBrowser(url, headless=headless, lockstep=lockstep,
                                    record_video_dir=record_video_dir)
         self.observation_space = gym.spaces.Box(-2.0, 2.0, shape=(6,), dtype=np.float32)
@@ -185,6 +191,9 @@ class FlappyEnv(gym.Env):
         passed = 0 if dead else self._count_passed()
         self.stats.score += passed
         reward = -1.0 if dead else 0.1 + passed
+        if self.shaping and not dead:
+            gap_center_rel = (obs[3] + obs[4]) / 2
+            reward += self.shaping * max(0.0, 1.0 - abs(float(gap_center_rel)) / 0.1)
         truncated = self.max_score is not None and self.stats.score >= self.max_score
         if dead:
             self.stats.death_cause = self._infer_death_cause()
